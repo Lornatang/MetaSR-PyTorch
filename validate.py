@@ -69,6 +69,7 @@ def main() -> None:
 
         # Convert BGR image to RGB image
         lr_image = cv2.cvtColor(lr_image, cv2.COLOR_BGR2RGB)
+        hr_image = cv2.cvtColor(hr_image, cv2.COLOR_BGR2RGB)
 
         # Convert Y image data convert to Y tensor data
         lr_tensor = imgproc.image2tensor(lr_image, range_norm=False, half=False).to(config.device).unsqueeze_(0)
