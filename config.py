@@ -78,10 +78,6 @@ if mode == "train":
     model_eps = 1e-8
     model_weight_decay = 0.0
 
-    # Dynamically adjust the learning rate policy
-    lr_scheduler_step_size = 20
-    lr_scheduler_gamma = 0.5
-
     # How many iterations to print the training result
     train_print_frequency = 100
     valid_print_frequency = 1

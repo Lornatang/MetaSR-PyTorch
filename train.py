@@ -19,7 +19,6 @@ import torch
 from torch import nn
 from torch import optim
 from torch.cuda import amp
-from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
@@ -56,9 +55,6 @@ def main():
 
     optimizer = define_optimizer(sr_model)
     print("Define all optimizer functions successfully.")
-
-    scheduler = define_scheduler(optimizer)
-    print("Define all optimizer scheduler successfully.")
 
     print("Check whether to load pretrained model weights...")
     if config.pretrained_model_weights_path:
@@ -114,9 +110,6 @@ def main():
                               ssim_model,
                               "Test")
         print("\n")
-
-        # Update LR
-        scheduler.step()
 
         # Automatically save the model with the highest index
         is_best = psnr > best_psnr and ssim > best_ssim
@@ -192,14 +185,6 @@ def define_optimizer(sr_model) -> optim.Adam:
                            config.model_weight_decay)
 
     return optimizer
-
-
-def define_scheduler(optimizer) -> lr_scheduler.StepLR:
-    scheduler = lr_scheduler.StepLR(optimizer,
-                                    config.lr_scheduler_step_size,
-                                    config.lr_scheduler_gamma)
-
-    return scheduler
 
 
 def train(
