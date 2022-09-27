@@ -87,4 +87,4 @@ if mode == "test":
     gt_dir = f"./data/Set5/GTmod12"
     sr_dir = f"./results/{exp_name}"
 
-    model_weights_path = f"./samples/Meta_RDN/epoch_10.pth.tar"
+    model_weights_path = f""
