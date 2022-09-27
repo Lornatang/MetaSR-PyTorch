@@ -11,14 +11,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ============================================================================
-"""File description: Realize the model training function."""
 import os
 import random
-import shutil
 import time
-from enum import Enum
 
-import numpy as np
 import torch
 from torch import nn
 from torch import optim
@@ -27,60 +23,66 @@ from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
-from torchvision.transforms import InterpolationMode as IMode
+from torchvision.transforms.functional import InterpolationMode as IMode
 
 import config
-import imgproc
+import model
 from dataset import CUDAPrefetcher, TrainValidImageDataset, TestImageDataset
-from model import MetaRDN
+from image_quality_assessment import PSNR, SSIM
+from imgproc import weight_prediction_matrix_from_lr
+from utils import load_state_dict, make_directory, save_checkpoint, AverageMeter, ProgressMeter
+
+model_names = sorted(
+    name for name in model.__dict__ if
+    name.islower() and not name.startswith("__") and callable(model.__dict__[name]))
 
 
 def main():
+    # Initialize the number of training epochs
+    start_epoch = 0
+
     # Initialize training to generate network evaluation indicators
     best_psnr = 0.0
+    best_ssim = 0.0
 
-    train_prefetcher, valid_prefetcher, test_prefetcher = load_dataset()
-    print("Load train dataset and valid dataset successfully.")
+    train_prefetcher, test_prefetcher = load_dataset()
+    print("Load all datasets successfully.")
 
-    model = build_model()
-    print("Build MetaRDN model successfully.")
+    sr_model = build_model()
+    print(f"Build `{config.arch_name}` model successfully.")
 
-    psnr_criterion, pixel_criterion = define_loss()
+    criterion = define_loss()
     print("Define all loss functions successfully.")
 
-    optimizer = define_optimizer(model)
+    optimizer = define_optimizer(sr_model)
     print("Define all optimizer functions successfully.")
 
     scheduler = define_scheduler(optimizer)
     print("Define all optimizer scheduler successfully.")
 
-    print("Check whether the pretrained model is restored...")
-    if config.resume:
-        # Load checkpoint model
-        checkpoint = torch.load(config.resume, map_location=lambda storage, loc: storage)
-        # Restore the parameters in the training node to this point
-        config.start_epoch = checkpoint["epoch"]
-        best_psnr = checkpoint["best_psnr"]
-        # Load checkpoint state dict. Extract the fitted model weights
-        model_state_dict = model.state_dict()
-        new_state_dict = {k: v for k, v in checkpoint["state_dict"].items() if k in model_state_dict}
-        # Overwrite the pretrained model weights to the current model
-        model_state_dict.update(new_state_dict)
-        model.load_state_dict(model_state_dict)
-        # Load the optimizer model
-        # optimizer.load_state_dict(checkpoint["optimizer"])
-        # Load the scheduler model
-        if checkpoint["scheduler"] is not None:
-            scheduler.load_state_dict(checkpoint["scheduler"])
-        print("Loaded pretrained model weights.")
+    print("Check whether to load pretrained model weights...")
+    if config.pretrained_model_weights_path:
+        sr_model = load_state_dict(sr_model, config.pretrained_model_weights_path)
+        print(f"Loaded `{config.pretrained_model_weights_path}` pretrained model weights successfully.")
+    else:
+        print("Pretrained model weights not found.")
 
-    # Create a folder of super-resolution experiment results
+    print("Check whether the pretrained model is restored...")
+    if config.resume_model_weights_path:
+        sr_model, _, start_epoch, best_psnr, best_ssim, optimizer, _ = load_state_dict(
+            sr_model,
+            config.pretrained_model_weights_path,
+            optimizer=optimizer,
+            load_mode="resume")
+        print("Loaded pretrained model weights.")
+    else:
+        print("Resume training model not found. Start training from scratch.")
+
+    # Create a experiment results
     samples_dir = os.path.join("samples", config.exp_name)
     results_dir = os.path.join("results", config.exp_name)
-    if not os.path.exists(samples_dir):
-        os.makedirs(samples_dir)
-    if not os.path.exists(results_dir):
-        os.makedirs(results_dir)
+    make_directory(samples_dir)
+    make_directory(results_dir)
 
     # Create training process log file
     writer = SummaryWriter(os.path.join("samples", "logs", config.exp_name))
@@ -88,35 +90,57 @@ def main():
     # Initialize the gradient scaler
     scaler = amp.GradScaler()
 
-    for epoch in range(config.start_epoch, config.epochs):
-        train(model, train_prefetcher, psnr_criterion, pixel_criterion, optimizer, epoch, scaler, writer)
-        # _ = validate(model, valid_prefetcher, psnr_criterion, epoch, writer, "Valid")
-        psnr = validate(model, test_prefetcher, psnr_criterion, epoch, writer, "Test")
+    # Create an IQA evaluation model
+    psnr_model = PSNR(config.upscale_factor, config.only_test_y_channel)
+    ssim_model = SSIM(config.upscale_factor, config.only_test_y_channel)
+
+    # Transfer the IQA model to the specified device
+    psnr_model = psnr_model.to(device=config.device)
+    ssim_model = ssim_model.to(device=config.device)
+
+    for epoch in range(start_epoch, config.epochs):
+        train(sr_model,
+              train_prefetcher,
+              criterion,
+              optimizer,
+              epoch,
+              scaler,
+              writer)
+        psnr, ssim = validate(sr_model,
+                              test_prefetcher,
+                              epoch,
+                              writer,
+                              psnr_model,
+                              ssim_model,
+                              "Test")
         print("\n")
 
-        # Update lr
+        # Update LR
         scheduler.step()
 
         # Automatically save the model with the highest index
-        is_best = psnr > best_psnr
+        is_best = psnr > best_psnr and ssim > best_ssim
+        is_last = (epoch + 1) == config.epochs
         best_psnr = max(psnr, best_psnr)
-        torch.save({"epoch": epoch + 1,
-                    "best_psnr": best_psnr,
-                    "state_dict": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict()},
-                   os.path.join(samples_dir, f"epoch_{epoch + 1}.pth.tar"))
-        if is_best:
-            shutil.copyfile(os.path.join(samples_dir, f"epoch_{epoch + 1}.pth.tar"), os.path.join(results_dir, "best.pth.tar"))
-        if (epoch + 1) == config.epochs:
-            shutil.copyfile(os.path.join(samples_dir, f"epoch_{epoch + 1}.pth.tar"), os.path.join(results_dir, "last.pth.tar"))
+        best_ssim = max(ssim, best_ssim)
+        save_checkpoint({"epoch": epoch + 1,
+                         "best_psnr": best_psnr,
+                         "best_ssim": best_ssim,
+                         "state_dict": sr_model.state_dict(),
+                         "optimizer": optimizer.state_dict()},
+                        f"epoch_{epoch + 1}.pth.tar",
+                        samples_dir,
+                        results_dir,
+                        "best.pth.tar",
+                        "last.pth.tar",
+                        is_best,
+                        is_last)
 
 
-def load_dataset() -> [CUDAPrefetcher, CUDAPrefetcher, CUDAPrefetcher]:
+def load_dataset() -> [CUDAPrefetcher, CUDAPrefetcher]:
     # Load train, test and valid datasets
-    train_datasets = TrainValidImageDataset(config.train_image_dir, config.image_size, "Train")
-    valid_datasets = TrainValidImageDataset(config.valid_image_dir, config.image_size, "Valid")
-    test_datasets = TestImageDataset(config.test_lr_image_dir, config.test_hr_image_dir)
+    train_datasets = TrainValidImageDataset(config.train_gt_images_dir, config.gt_image_size, "Train")
+    test_datasets = TestImageDataset(config.test_gt_images_dir, config.test_lr_images_dir)
 
     # Generator all dataloader
     train_dataloader = DataLoader(train_datasets,
@@ -125,13 +149,6 @@ def load_dataset() -> [CUDAPrefetcher, CUDAPrefetcher, CUDAPrefetcher]:
                                   num_workers=config.num_workers,
                                   pin_memory=True,
                                   drop_last=True,
-                                  persistent_workers=True)
-    valid_dataloader = DataLoader(valid_datasets,
-                                  batch_size=1,
-                                  shuffle=False,
-                                  num_workers=1,
-                                  pin_memory=True,
-                                  drop_last=False,
                                   persistent_workers=True)
     test_dataloader = DataLoader(test_datasets,
                                  batch_size=1,
@@ -143,263 +160,214 @@ def load_dataset() -> [CUDAPrefetcher, CUDAPrefetcher, CUDAPrefetcher]:
 
     # Place all data on the preprocessing data loader
     train_prefetcher = CUDAPrefetcher(train_dataloader, config.device)
-    valid_prefetcher = CUDAPrefetcher(valid_dataloader, config.device)
     test_prefetcher = CUDAPrefetcher(test_dataloader, config.device)
 
-    return train_prefetcher, valid_prefetcher, test_prefetcher
+    return train_prefetcher, test_prefetcher
 
 
 def build_model() -> nn.Module:
-    model = MetaRDN().to(config.device)
+    sr_model = model.__dict__[config.arch_name](in_channels=config.in_channels,
+                                                out_channels=config.out_channels,
+                                                channels=config.channels,
+                                                growth_channels=config.growth_channels,
+                                                conv_layers=config.conv_layers,
+                                                num_blocks=config.num_blocks)
+    sr_model = sr_model.to(device=config.device)
 
-    return model
+    return sr_model
 
 
-def define_loss() -> [nn.MSELoss, nn.L1Loss]:
-    psnr_criterion = nn.MSELoss().to(config.device)
-    pixel_criterion = nn.L1Loss().to(config.device)
+def define_loss() -> nn.L1Loss:
+    criterion = nn.L1Loss()
+    criterion = criterion.to(device=config.device)
 
-    return psnr_criterion, pixel_criterion
+    return criterion
 
 
-def define_optimizer(model) -> optim.Adam:
-    optimizer = optim.Adam(model.parameters(), lr=config.model_lr, betas=config.model_betas)
+def define_optimizer(sr_model) -> optim.Adam:
+    optimizer = optim.Adam(sr_model.parameters(),
+                           config.model_lr,
+                           config.model_betas,
+                           config.model_eps,
+                           config.model_weight_decay)
 
     return optimizer
 
 
-def define_scheduler(optimizer) -> lr_scheduler.MultiStepLR:
-    scheduler = lr_scheduler.StepLR(optimizer, step_size=config.lr_scheduler_step_size, gamma=config.lr_scheduler_gamma)
+def define_scheduler(optimizer) -> lr_scheduler.StepLR:
+    scheduler = lr_scheduler.StepLR(optimizer,
+                                    config.lr_scheduler_step_size,
+                                    config.lr_scheduler_gamma)
 
     return scheduler
 
 
-def train(model, train_prefetcher, psnr_criterion, pixel_criterion, optimizer, epoch, scaler, writer) -> None:
-    # Calculate how many iterations there are under epoch
+def train(
+        sr_model: nn.Module,
+        train_prefetcher: CUDAPrefetcher,
+        criterion: nn.L1Loss,
+        optimizer: optim.Adam,
+        epoch: int,
+        scaler: amp.GradScaler,
+        writer: SummaryWriter
+) -> None:
+    # Calculate how many batches of data are in each Epoch
     batches = len(train_prefetcher)
-
+    # Print information of progress bar during training
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
     losses = AverageMeter("Loss", ":6.6f")
-    psnres = AverageMeter("PSNR", ":4.2f")
-    progress = ProgressMeter(batches, [batch_time, data_time, losses, psnres], prefix=f"Epoch: [{epoch + 1}]")
+    progress = ProgressMeter(batches, [batch_time, data_time, losses], prefix=f"Epoch: [{epoch + 1}]")
 
-    # Put the generator in training mode
-    model.train()
+    # Put the generative network model in training mode
+    sr_model.train()
 
+    # Initialize the number of data batches to print logs on the terminal
     batch_index = 0
 
-    # Calculate the time it takes to test a batch of data
-    end = time.time()
-    # enable preload
+    # Initialize the data loader and load the first batch of data
     train_prefetcher.reset()
     batch_data = train_prefetcher.next()
+
+    # Get the initialization training time
+    end = time.time()
+
     while batch_data is not None:
-        # measure data loading time
+        # Calculate the time it takes to load a batch of data
         data_time.update(time.time() - end)
 
+        # Randomly choose any scale for scaling
         upscale_factor = random.choice(config.upscale_factor_list)
 
-        hr = transforms.RandomCrop([int(upscale_factor * config.image_size), int(upscale_factor * config.image_size)])(batch_data["hr"])
-        lr = transforms.Resize([config.image_size, config.image_size], interpolation=IMode.BICUBIC)(hr)
+        # According to the requirement in the paper, the lr image size should be 50
+        gt = transforms.RandomCrop([int(upscale_factor * config.lr_image_size),
+                                    int(upscale_factor * config.lr_image_size)])(batch_data["gt"])
+        lr = transforms.Resize([config.lr_image_size, config.lr_image_size], interpolation=IMode.BICUBIC)(gt)
 
+        gt = gt.to(config.device, non_blocking=True)
         lr = lr.to(config.device, non_blocking=True)
-        hr = hr.to(config.device, non_blocking=True)
 
         # Get the position matrix, mask
         batch_size, channels, lr_height, lr_width = lr.size()
-        _, _, hr_height, hr_width = hr.size()
-        pos_matrix, mask_matrix = imgproc.weight_prediction_matrix_from_lr(lr_height, lr_width, upscale_factor)
+        _, _, gt_height, gt_width = gt.size()
+        pos_matrix, mask_matrix = weight_prediction_matrix_from_lr(lr_height, lr_width, upscale_factor)
         pos_matrix = pos_matrix.to(config.device, non_blocking=True)
         mask_matrix = mask_matrix.to(config.device, non_blocking=True)
 
         # Initialize the generator gradient
-        model.zero_grad()
+        sr_model.zero_grad(set_to_none=True)
 
         # Mixed precision training
         with amp.autocast():
-            sr = model(lr, pos_matrix, upscale_factor)
+            sr = sr_model(lr, pos_matrix, upscale_factor)
             sr = torch.masked_select(sr, mask_matrix)
-            sr = sr.contiguous().view(batch_size, channels, hr_height, hr_width)
-            loss = pixel_criterion(sr, hr)
+            sr = sr.contiguous().view(batch_size, channels, gt_height, gt_width)
+            loss = torch.mul(config.loss_weights, criterion(sr, gt))
 
-        # Gradient zoom
+        # Backpropagation
         scaler.scale(loss).backward()
-        # Update generator weight
+        # update generator weights
         scaler.step(optimizer)
         scaler.update()
 
-        # measure accuracy and record loss
-        psnr = 10. * torch.log10(1. / psnr_criterion(sr, hr))
+        # Statistical loss value for terminal data output
         losses.update(loss.item(), lr.size(0))
-        psnres.update(psnr.item(), lr.size(0))
 
-        # measure elapsed time
+        # Calculate the time it takes to fully train a batch of data
         batch_time.update(time.time() - end)
         end = time.time()
 
-        # Record training log information
-        if batch_index % config.print_frequency == 0:
-            # Writer Loss to file
+        # Write the data during training to the training log file
+        if batch_index % config.train_print_frequency == 0:
+            # Record loss during training and output to file
             writer.add_scalar("Train/Loss", loss.item(), batch_index + epoch * batches + 1)
-            progress.display(batch_index)
+            progress.display(batch_index + 1)
 
         # Preload the next batch of data
         batch_data = train_prefetcher.next()
 
-        # After a batch of data is calculated, add 1 to the number of batches
+        # Add 1 to the number of data batches to ensure that the terminal prints data normally
         batch_index += 1
 
 
-def validate(model, valid_prefetcher, psnr_criterion, epoch, writer, mode) -> float:
+def validate(
+        srresnet_model: nn.Module,
+        data_prefetcher: CUDAPrefetcher,
+        epoch: int,
+        writer: SummaryWriter,
+        psnr_model: nn.Module,
+        ssim_model: nn.Module,
+        mode: str
+) -> [float, float]:
+    # Calculate how many batches of data are in each Epoch
     batch_time = AverageMeter("Time", ":6.3f")
     psnres = AverageMeter("PSNR", ":4.2f")
-    progress = ProgressMeter(len(valid_prefetcher), [batch_time, psnres], prefix="Valid: ")
+    ssimes = AverageMeter("SSIM", ":4.4f")
+    progress = ProgressMeter(len(data_prefetcher), [batch_time, psnres, ssimes], prefix=f"{mode}: ")
 
-    # Put the model in verification mode
-    model.eval()
+    # Put the adversarial network model in validation mode
+    srresnet_model.eval()
 
+    # Initialize the number of data batches to print logs on the terminal
     batch_index = 0
 
-    # Calculate the time it takes to test a batch of data
+    # Initialize the data loader and load the first batch of data
+    data_prefetcher.reset()
+    batch_data = data_prefetcher.next()
+
+    # Get the initialization test time
     end = time.time()
+
     with torch.no_grad():
-        # enable preload
-        valid_prefetcher.reset()
-        batch_data = valid_prefetcher.next()
-
         while batch_data is not None:
-            upscale_factor = 2
-
-            hr = transforms.RandomCrop([int(upscale_factor * config.image_size), int(upscale_factor * config.image_size)])(batch_data["hr"])
-            lr = transforms.Resize([config.image_size, config.image_size], interpolation=IMode.BICUBIC)(hr)
-
-            lr = lr.to(config.device, non_blocking=True)
-            hr = hr.to(config.device, non_blocking=True)
+            # Transfer the in-memory data to the CUDA device to speed up the test
+            gt = batch_data["gt"].to(device=config.device, non_blocking=True)
+            lr = batch_data["lr"].to(device=config.device, non_blocking=True)
 
             # Get the position matrix, mask
             batch_size, channels, lr_height, lr_width = lr.size()
-            _, _, hr_height, hr_width = hr.size()
-            pos_matrix, mask_matrix = imgproc.weight_prediction_matrix_from_lr(lr_height, lr_width, upscale_factor)
+            _, _, gt_height, gt_width = gt.size()
+            pos_matrix, mask_matrix = weight_prediction_matrix_from_lr(lr_height, lr_width, config.upscale_factor)
             pos_matrix = pos_matrix.to(config.device, non_blocking=True)
             mask_matrix = mask_matrix.to(config.device, non_blocking=True)
 
-            # Mixed precision
+            # Use the generator model to generate a fake sample
             with amp.autocast():
-                sr = model(lr, pos_matrix, upscale_factor)
+                sr = srresnet_model(lr, pos_matrix, config.upscale_factor)
                 sr = torch.masked_select(sr, mask_matrix)
-                sr = sr.contiguous().view(batch_size, channels, hr_height, hr_width)
+                sr = sr.contiguous().view(batch_size, channels, gt_height, gt_width)
 
-            # Convert RGB tensor to Y tensor
-            sr_image = imgproc.tensor2image(sr, range_norm=False, half=True)
-            sr_image = sr_image.astype(np.float32) / 255.
-            sr_y_image = imgproc.rgb2ycbcr(sr_image, use_y_channel=True)
-            sr_y_tensor = imgproc.image2tensor(sr_y_image, range_norm=False, half=True).to(config.device).unsqueeze_(0)
-
-            hr_image = imgproc.tensor2image(hr, range_norm=False, half=True)
-            hr_image = hr_image.astype(np.float32) / 255.
-            hr_y_image = imgproc.rgb2ycbcr(hr_image, use_y_channel=True)
-            hr_y_tensor = imgproc.image2tensor(hr_y_image, range_norm=False, half=True).to(config.device).unsqueeze_(0)
-
-            # measure accuracy and record loss
-            psnr = 10. * torch.log10(1. / psnr_criterion(sr_y_tensor, hr_y_tensor))
+            # Statistical loss value for terminal data output
+            psnr = psnr_model(sr, gt)
+            ssim = ssim_model(sr, gt)
             psnres.update(psnr.item(), lr.size(0))
+            ssimes.update(ssim.item(), lr.size(0))
 
-            # measure elapsed time
+            # Calculate the time it takes to fully test a batch of data
             batch_time.update(time.time() - end)
             end = time.time()
 
             # Record training log information
-            if batch_index % config.print_frequency == 0:
-                progress.display(batch_index)
+            if batch_index % config.valid_print_frequency == 0:
+                progress.display(batch_index + 1)
 
             # Preload the next batch of data
-            batch_data = valid_prefetcher.next()
+            batch_data = data_prefetcher.next()
 
-            # After a batch of data is calculated, add 1 to the number of batches
+            # After training a batch of data, add 1 to the number of data batches to ensure that the
+            # terminal print data normally
             batch_index += 1
 
-    # Print average PSNR metrics
+    # print metrics
     progress.display_summary()
 
-    if mode == "Valid":
-        writer.add_scalar("Valid/PSNR", psnres.avg, epoch + 1)
-    elif mode == "Test":
-        writer.add_scalar("Test/PSNR", psnres.avg, epoch + 1)
+    if mode == "Valid" or mode == "Test":
+        writer.add_scalar(f"{mode}/PSNR", psnres.avg, epoch + 1)
+        writer.add_scalar(f"{mode}/SSIM", ssimes.avg, epoch + 1)
     else:
         raise ValueError("Unsupported mode, please use `Valid` or `Test`.")
 
-    return psnres.avg
-
-
-# Copy form "https://github.com/pytorch/examples/blob/master/imagenet/main.py"
-class Summary(Enum):
-    NONE = 0
-    AVERAGE = 1
-    SUM = 2
-    COUNT = 3
-
-
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-
-    def __init__(self, name, fmt=":f", summary_type=Summary.AVERAGE):
-        self.name = name
-        self.fmt = fmt
-        self.summary_type = summary_type
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-    def __str__(self):
-        fmtstr = "{name} {val" + self.fmt + "} ({avg" + self.fmt + "})"
-        return fmtstr.format(**self.__dict__)
-
-    def summary(self):
-        if self.summary_type is Summary.NONE:
-            fmtstr = ""
-        elif self.summary_type is Summary.AVERAGE:
-            fmtstr = "{name} {avg:.2f}"
-        elif self.summary_type is Summary.SUM:
-            fmtstr = "{name} {sum:.2f}"
-        elif self.summary_type is Summary.COUNT:
-            fmtstr = "{name} {count:.2f}"
-        else:
-            raise ValueError(f"Invalid summary type {self.summary_type}")
-
-        return fmtstr.format(**self.__dict__)
-
-
-class ProgressMeter(object):
-    def __init__(self, num_batches, meters, prefix=""):
-        self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
-        self.meters = meters
-        self.prefix = prefix
-
-    def display(self, batch):
-        entries = [self.prefix + self.batch_fmtstr.format(batch)]
-        entries += [str(meter) for meter in self.meters]
-        print("\t".join(entries))
-
-    def display_summary(self):
-        entries = [" *"]
-        entries += [meter.summary() for meter in self.meters]
-        print(" ".join(entries))
-
-    def _get_batch_fmtstr(self, num_batches):
-        num_digits = len(str(num_batches // 1))
-        fmt = "{:" + str(num_digits) + "d}"
-        return "[" + fmt + "/" + fmt.format(num_batches) + "]"
+    return psnres.avg, ssimes.avg
 
 
 if __name__ == "__main__":

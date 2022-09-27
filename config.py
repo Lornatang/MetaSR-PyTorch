@@ -25,6 +25,18 @@ np.random.seed(0)
 device = torch.device("cuda", 0)
 # Turning on when the image size does not change during training can speed up training
 cudnn.benchmark = True
+# When evaluating the performance of the SR model, whether to verify only the Y channel image data
+only_test_y_channel = True
+# Model architecture name
+arch_name = "meta_rdn"
+# Model arch config
+in_channels = 3
+out_channels = 3
+channels = 64
+growth_channels = 64
+conv_layers = 8
+num_blocks = 16
+upscale_factor = 4  # Use for test
 # Image magnification factor
 upscale_factor_list = [
     1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0,
@@ -34,40 +46,49 @@ upscale_factor_list = [
 # Current configuration parameter method
 mode = "train"
 # Experiment name, easy to save weights and log files
-exp_name = "Meta_RDN_baeline"
+exp_name = "Meta_RDN"
 
 if mode == "train":
-    # Dataset
-    train_image_dir = f"data/DIV2K/Meta_RDN/train"
-    valid_image_dir = f"data/DIV2K/Meta_RDN/valid"
-    test_lr_image_dir = f"data/Set14/LRbicx2"
-    test_hr_image_dir = f"data/Set14/GTmod12"
+    # Dataset address
+    train_gt_images_dir = f"./data/DIV2K/Meta_RDN/train"
 
-    image_size = 50
+    test_gt_images_dir = f"./data/Set5/GTmod12"
+    test_lr_images_dir = f"./data/Set5/LRbicx{upscale_factor}"
+
+    gt_image_size = 232
+    lr_image_size = 50
     batch_size = 16
     num_workers = 4
 
+    # The address to load the pretrained model
+    pretrained_model_weights_path = ""
+
     # Incremental training and migration training
-    start_epoch = 0
-    resume = ""
+    resume_model_weights_path = f""
 
     # Total num epochs
-    epochs = 100
+    epochs = 200
 
-    # Adam optimizer parameter
+    # loss function weights
+    loss_weights = 1.0
+
+    # Optimizer parameter
     model_lr = 1e-4
-    model_betas = (0.9, 0.999)
+    model_betas = (0.9, 0.99)
+    model_eps = 1e-8
+    model_weight_decay = 0.0
 
-    # StepLR scheduler parameter
+    # Dynamically adjust the learning rate policy
     lr_scheduler_step_size = 20
     lr_scheduler_gamma = 0.5
 
-    print_frequency = 1000
+    # How many iterations to print the training result
+    train_print_frequency = 100
+    valid_print_frequency = 1
 
-if mode == "valid":
+if mode == "test":
     # Test data address
-    lr_dir = f"data/Set14/LRbicx2"
-    sr_dir = f"results/test/{exp_name}"
-    hr_dir = f"data/Set14/GTmod12"
+    gt_dir = f"./data/Set5/GTmod12"
+    sr_dir = f"./results/{exp_name}"
 
-    model_path = f"results/{exp_name}/best.pth.tar"
+    model_weights_path = f"./samples/Meta_RDN/epoch_6.pth.tar"
