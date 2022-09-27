@@ -390,7 +390,7 @@ def _psnr_torch(raw_tensor: torch.Tensor, dst_tensor: torch.Tensor, crop_border:
     dst_tensor = dst_tensor.to(torch.float64)
 
     mse_value = torch.mean((raw_tensor * 255.0 - dst_tensor * 255.0) ** 2 + 1e-8, dim=[1, 2, 3])
-    psnr_metrics = 10 * torch.log10_(255.0 ** 2 / mse_value)
+    psnr_metrics = 10 * torch.log10(255.0 ** 2 / mse_value)
 
     return psnr_metrics
 
