@@ -184,27 +184,27 @@ def tensor_to_image(tensor: Tensor, range_norm: bool, half: bool) -> Any:
 
 
 # Reference from `https://github.com/XuecaiHu/Meta-SR-Pytorch/blob/0.4.0/trainer.py`
-def weight_prediction_matrix_from_lr(lr_image_height: int, lr_image_width: int, up_scale_factor: float):
+def weight_prediction_matrix_from_lr(lr_image_height: int, lr_image_width: int, upscale_factor: float):
     """Weight prediction matrix from LR to SR"""
-    sr_image_height, sr_image_width = int(up_scale_factor * lr_image_height), int(up_scale_factor * lr_image_width)
+    sr_image_height, sr_image_width = int(upscale_factor * lr_image_height), int(upscale_factor * lr_image_width)
 
     # Calculate the input matrix by calculating the offset
-    up_scale_factor = int(math.ceil(up_scale_factor))
+    upscale_factor_int = int(math.ceil(upscale_factor))
 
-    height_offset = torch.ones(lr_image_height, up_scale_factor, 1)
-    width_offset = torch.ones(1, lr_image_width, up_scale_factor)
+    height_offset = torch.ones(lr_image_height, upscale_factor_int, 1)
+    width_offset = torch.ones(1, lr_image_width, upscale_factor_int)
 
-    height_mask = torch.zeros(lr_image_height, up_scale_factor, 1)
-    width_mask = torch.zeros(1, lr_image_width, up_scale_factor)
+    height_mask = torch.zeros(lr_image_height, upscale_factor_int, 1)
+    width_mask = torch.zeros(1, lr_image_width, upscale_factor_int)
 
     upscale_factor_matrix = torch.zeros(1, 1)
-    upscale_factor_matrix[0, 0] = 1.0 / up_scale_factor
+    upscale_factor_matrix[0, 0] = 1.0 / upscale_factor
     # (lr_image_width * lr_image_height * up_scale_factor ** 2, 4)
-    upscale_factor_matrix = torch.cat([upscale_factor_matrix] * (lr_image_height * lr_image_width * (up_scale_factor ** 2)), 0)
+    upscale_factor_matrix = torch.cat([upscale_factor_matrix] * (lr_image_height * lr_image_width * (upscale_factor_int ** 2)), 0)
 
     # Calculate projected coordinate offsets
-    height_project_coord_offset = torch.arange(0, sr_image_height, 1).float().mul(1.0 / up_scale_factor)
-    width_project_coord_offset = torch.arange(0, sr_image_width, 1).float().mul(1.0 / up_scale_factor)
+    height_project_coord_offset = torch.arange(0, sr_image_height, 1).float().mul(1.0 / upscale_factor)
+    width_project_coord_offset = torch.arange(0, sr_image_width, 1).float().mul(1.0 / upscale_factor)
 
     floor_height_project_coord_offset = torch.floor(height_project_coord_offset)
     floor_width_project_coord_offset = torch.floor(width_project_coord_offset)
@@ -242,14 +242,14 @@ def weight_prediction_matrix_from_lr(lr_image_height: int, lr_image_width: int, 
             number += 1
             flag = 1
 
-    height_coord_offset = torch.cat([height_offset] * (up_scale_factor * lr_image_width), 2).view(-1, up_scale_factor * lr_image_width, 1)
-    width_coord_offset = torch.cat([width_offset] * (up_scale_factor * lr_image_height), 0).view(-1, up_scale_factor * lr_image_width, 1)
+    height_coord_offset = torch.cat([height_offset] * (upscale_factor_int * lr_image_width), 2).view(-1, upscale_factor_int * lr_image_width, 1)
+    width_coord_offset = torch.cat([width_offset] * (upscale_factor_int * lr_image_height), 0).view(-1, upscale_factor_int * lr_image_width, 1)
 
-    height_mask = torch.cat([height_mask] * (up_scale_factor * lr_image_width), 2).view(-1, up_scale_factor * lr_image_width, 1)
-    width_mask = torch.cat([width_mask] * (up_scale_factor * lr_image_height), 0).view(-1, up_scale_factor * lr_image_width, 1)
+    height_mask = torch.cat([height_mask] * (upscale_factor_int * lr_image_width), 2).view(-1, upscale_factor_int * lr_image_width, 1)
+    width_mask = torch.cat([width_mask] * (upscale_factor_int * lr_image_height), 0).view(-1, upscale_factor_int * lr_image_width, 1)
 
     pos_matrix = torch.cat((height_coord_offset, width_coord_offset), 2)
-    mask_matrix = torch.sum(torch.cat((height_mask, width_mask), 2), 2).view(up_scale_factor * lr_image_height, up_scale_factor * lr_image_width)
+    mask_matrix = torch.sum(torch.cat((height_mask, width_mask), 2), 2).view(upscale_factor_int * lr_image_height, upscale_factor_int * lr_image_width)
     mask_matrix = mask_matrix.eq(2)
     pos_matrix = pos_matrix.contiguous().view(1, -1, 2)
 
