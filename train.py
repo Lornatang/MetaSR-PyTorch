@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ============================================================================
+import math
 import os
 import random
 import time
@@ -87,8 +88,8 @@ def main():
     scaler = amp.GradScaler()
 
     # Create an IQA evaluation model
-    psnr_model = PSNR(config.upscale_factor, config.only_test_y_channel)
-    ssim_model = SSIM(config.upscale_factor, config.only_test_y_channel)
+    psnr_model = PSNR(math.ceil(config.upscale_factor), config.only_test_y_channel)
+    ssim_model = SSIM(math.ceil(config.upscale_factor), config.only_test_y_channel)
 
     # Transfer the IQA model to the specified device
     psnr_model = psnr_model.to(device=config.device)
@@ -276,7 +277,7 @@ def train(
 
 
 def validate(
-        srresnet_model: nn.Module,
+        sr_model: nn.Module,
         data_prefetcher: CUDAPrefetcher,
         epoch: int,
         writer: SummaryWriter,
@@ -291,7 +292,7 @@ def validate(
     progress = ProgressMeter(len(data_prefetcher), [batch_time, psnres, ssimes], prefix=f"{mode}: ")
 
     # Put the adversarial network model in validation mode
-    srresnet_model.eval()
+    sr_model.eval()
 
     # Initialize the number of data batches to print logs on the terminal
     batch_index = 0
@@ -318,7 +319,7 @@ def validate(
 
             # Use the generator model to generate a fake sample
             with amp.autocast():
-                sr = srresnet_model(lr, pos_matrix, config.upscale_factor)
+                sr = sr_model(lr, pos_matrix, config.upscale_factor)
                 sr = torch.masked_select(sr, mask_matrix)
                 sr = sr.contiguous().view(batch_size, channels, gt_height, gt_width)
 

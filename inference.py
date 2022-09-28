@@ -18,8 +18,8 @@ import cv2
 import torch
 from torch import nn
 
-import imgproc
 import model
+from imgproc import weight_prediction_matrix_from_lr, preprocess_one_image, tensor_to_image
 from utils import load_state_dict
 
 model_names = sorted(
@@ -38,38 +38,50 @@ def choice_device(device_type: str) -> torch.device:
 
 def build_model(model_arch_name: str, device: torch.device) -> nn.Module:
     # Initialize the super-resolution model
-    g_model = model.__dict__[model_arch_name](in_channels=3,
-                                              out_channels=3,
-                                              channels=64,
-                                              growth_channels=32,
-                                              num_blocks=23)
-    g_model = g_model.to(device=device)
+    sr_model = model.__dict__[model_arch_name](in_channels=3,
+                                               out_channels=3,
+                                               channels=64,
+                                               growth_channels=64,
+                                               conv_layers=8,
+                                               num_blocks=16)
+    sr_model = sr_model.to(device=device)
 
-    return g_model
+    return sr_model
 
 
 def main(args):
     device = choice_device(args.device_type)
 
     # Initialize the model
-    g_model = build_model(args.model_arch_name, device)
+    sr_model = build_model(args.model_arch_name, device)
     print(f"Build `{args.model_arch_name}` model successfully.")
 
     # Load model weights
-    g_model = load_state_dict(g_model, args.model_weights_path)
+    sr_model = load_state_dict(sr_model, args.model_weights_path)
     print(f"Load `{args.model_arch_name}` model weights `{os.path.abspath(args.model_weights_path)}` successfully.")
 
     # Start the verification mode of the model.
-    g_model.eval()
+    sr_model.eval()
 
-    lr_tensor = imgproc.preprocess_one_image(args.inputs_path, device)
+    lr_tensor = preprocess_one_image(args.inputs_path, device)
+
+    # Get the position matrix, mask
+    batch_size, channels, lr_height, lr_width = lr_tensor.size()
+    pos_matrix, mask_matrix = weight_prediction_matrix_from_lr(lr_height, lr_width, args.upscale_factor)
+    pos_matrix = pos_matrix.to(device, non_blocking=True)
+    mask_matrix = mask_matrix.to(device, non_blocking=True)
+
+    # Get GT image size
+    gt_height = int(lr_height * args.upscale_factor)
+    gt_width = int(lr_width * args.upscale_factor)
 
     # Use the model to generate super-resolved images
     with torch.no_grad():
-        sr_tensor = g_model(lr_tensor)
-
+        sr_tensor = sr_model(lr_tensor, pos_matrix, args.upscale_factor)
+        sr_tensor = torch.masked_select(sr_tensor, mask_matrix)
+        sr_tensor = sr_tensor.contiguous().view(batch_size, channels, gt_height, gt_width)
     # Save image
-    sr_image = imgproc.tensor_to_image(sr_tensor, False, False)
+    sr_image = tensor_to_image(sr_tensor, False, False)
     sr_image = cv2.cvtColor(sr_image, cv2.COLOR_RGB2BGR)
     cv2.imwrite(args.output_path, sr_image)
 
@@ -80,18 +92,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Using the model generator super-resolution images.")
     parser.add_argument("--model_arch_name",
                         type=str,
-                        default="esrgan_x4")
+                        default="meta_rdn")
+    parser.add_argument("--upscale_factor",
+                        type=float,
+                        default="4.0")
     parser.add_argument("--inputs_path",
                         type=str,
-                        default="./figure/baboon_lr.png",
+                        default="./figure/comic_lr.png",
                         help="Low-resolution image path.")
     parser.add_argument("--output_path",
                         type=str,
-                        default="./figure/baboon_sr.png",
+                        default="./figure/comic_sr.png",
                         help="Super-resolution image path.")
     parser.add_argument("--model_weights_path",
                         type=str,
-                        default="./results/pretrained_models/ESRGAN_x4-DFO2K-25393df7.pth.tar",
+                        default="./results/pretrained_models/Meta_RDN-DIV2K-c33d0329.pth.tar",
                         help="Model weights file path.")
     parser.add_argument("--device_type",
                         type=str,

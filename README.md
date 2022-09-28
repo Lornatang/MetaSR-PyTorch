@@ -9,28 +9,15 @@ This repository contains an op-for-op PyTorch reimplementation of [Meta-SR: A Ma
 - [Meta_RDN-PyTorch](#meta_rdn-pytorch)
     - [Overview](#overview)
     - [Table of contents](#table-of-contents)
-    - [About Meta-SR: A Magnification-Arbitrary Network for Super-Resolution](#about-meta-sr-a-magnification-arbitrary-network-for-super-resolution)
     - [Download weights](#download-weights)
     - [Download datasets](#download-datasets)
+    - [How Test and Train](#how-test-and-train)
     - [Test](#test)
-    - [Train](#train)
+    - [Train Meta_RDN model](#train-meta_rdn-model)
+    - [Resume train Meta_RDN model](#resume-train-meta_rdn-model)
     - [Result](#result)
     - [Credit](#credit)
-        - [Meta-SR: A Magnification-Arbitrary Network for Super-Resolution](#enhanced-deep-residual-networks-for-single-image-super-resolution)
-
-## About Meta-SR: A Magnification-Arbitrary Network for Super-Resolution
-
-If you're new to Meta-RDN, here's an abstract straight from the paper:
-
-Recent research on super-resolution has achieved great success due to the development of deep convolutional neural networks (DCNNs). However,
-super-resolution of arbitrary scale factor has been ignored for a long time. Most previous researchers regard super-resolution of different scale
-factors as independent tasks. They train a specific model for each scale factor which is inefficient in computing, and prior work only take the
-super-resolution of several integer scale factors into consideration. In this work, we propose a novel method called Meta-SR to firstly solve
-super-resolution of arbitrary scale factor (including non-integer scale factors) with a single model. In our Meta-SR, the Meta-Upscale Module is
-proposed to replace the traditional upscale module. For arbitrary scale factor, the Meta-Upscale Module dynamically predicts the weights of the
-upscale filters by taking the scale factor as input and use these weights to generate the HR image of arbitrary size. For any low-resolution image,
-our Meta-SR can continuously zoom in it with arbitrary scale factor by only using a single model. We evaluated the proposed method through extensive
-experiments on widely used benchmark datasets on single image super-resolution. The experimental results show the superiority of our Meta-Upscale.
+        - [Meta-SR: A Magnification-Arbitrary Network for Super-Resolution](#meta-sr-a-magnification-arbitrary-network-for-super-resolution)
 
 ## Download weights
 
@@ -44,25 +31,51 @@ Contains DIV2K, DIV8K, Flickr2K, OST, T91, Set5, Set14, BSDS100 and BSDS200, etc
 - [Google Driver](https://drive.google.com/drive/folders/1A6lzGeQrFMxPqJehK9s37ce-tPDj20mD?usp=sharing)
 - [Baidu Driver](https://pan.baidu.com/s/1o-8Ty_7q6DiS3ykLU09IVg?pwd=llot)
 
+Please refer to `README.md` in the `data` directory for the method of making a dataset.
+
+## How Test and Train
+
+Both training and testing only need to modify the `config.py` file. 
+
 ## Test
 
-Modify the contents of the `config.py` file as follows.
+Modify the `config.py` file.
 
-- line 35: `upscale_factor` change to the magnification you need to enlarge.
-- line 37: `mode` change Set to valid mode.
-- line 73: `model_path` change weight address after training.
+- line 31: `arch_name` change to `meta_rdn`.
+- line 39: `upscale_factor` change to `4.0`.
+- line 47: `mode` change to `test`.
+- line 49: `exp_name` change to `test_Meta_RDN`.
+- line 82: `model_weights_path` change to `./results/pretrained_models/Meta_RDN-DIV2K-c33d0329.pth.tar`.
 
-## Train
+```bash
+python3 test.py
+```
 
-Modify the contents of the `config.py`file as follows.
+## Train Meta_RDN model
 
-- line 35: `upscale_factor` change to the magnification you need to enlarge.
-- line 37: `mode` change Set to train mode.
+Modify the `config.py` file.
 
-If you want to load weights that you've trained before, modify the contents of the `config.py` file as follows.
+- line 31: `arch_name` change to `meta_rdn`.
+- line 39: `upscale_factor` change to `4.0`.
+- line 47: `mode` change to `train`.
+- line 49: `exp_name` change to `Meta_RDN`.
 
-- line 51: `start_epoch` change number of training iterations in the previous round.
-- line 52: `resume` the weight address that needs to be loaded.
+```bash
+python3 train.py
+```
+
+## Resume train Meta_RDN model
+
+Modify the `config.py` file.
+
+- line 31: `arch_name` change to `meta_rdn`.
+- line 39: `upscale_factor` change to `4.0`.
+- line 47: `mode` change to `train`.
+- line 49: `exp_name` change to `Meta_RDN`.
+- line 64: `resume_model_weights_path` change to `./samples/Meta_RDN/epoch_xxx.pth.tar`.
+
+```bash
+python3 train.py
 
 ## Result
 
@@ -70,16 +83,33 @@ Source of original paper results: https://arxiv.org/pdf/1903.00875v4.pdf
 
 In the following table, the value in `()` indicates the result of the project, and `-` indicates no test.
 
-| Dataset | Scale |     PSNR     |
-|:-------:|:-----:|:------------:|
-|  Set14  |  2.0  | 32.35(**-**) |
-|  Set14  |  2.5  | 30.45(**-**) |
-|  Set14  |  3.0  | 29.30(**-**) |
-|  Set14  |  3.5  | 28.32(**-**) |
-|  Set14  |  4.0  | 27.75(**-**) |
+| Dataset | Scale |       PSNR       |
+|:-------:|:-----:|:----------------:|
+|  Set14  |  2.0  | 32.35(**32.37**) |
+|  Set14  |  2.5  | 30.45(**29.85**) |
+|  Set14  |  3.0  | 29.30(**27.95**) |
+|  Set14  |  3.5  | 28.32(**27.29**) |
+|  Set14  |  4.0  | 27.75(**26.55**) |
 
-Low Resolution / Super Resolution / High Resolution
-<span align="center"><img src="assets/result.png"/></span>
+```bash
+# Download `Meta_RDN-DIV2K-c33d0329.pth.tar` weights to `./results/pretrained_models`
+# More detail see `README.md<Download weights>`
+python3 ./inference.py
+```
+
+Input: 
+
+<span align="center"><img width="240" height="360" src="figure/comic_lr.png"/></span>
+
+Output: 
+
+<span align="center"><img width="240" height="360" src="figure/comic_sr.png"/></span>
+
+```text
+Build `meta_rdn` model successfully.
+Load `meta_rdn` model weights `./results/pretrained_models/./results/pretrained_models/Meta_RDN-DIV2K-c33d0329.pth.tar` successfully.
+SR image save to `./figure/comic_sr.png`
+```
 
 ### Credit
 

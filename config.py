@@ -36,7 +36,7 @@ channels = 64
 growth_channels = 64
 conv_layers = 8
 num_blocks = 16
-upscale_factor = 4  # Use for test
+upscale_factor = 4.0  # Use for test
 # Image magnification factor
 upscale_factor_list = [
     1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0,
@@ -53,7 +53,7 @@ if mode == "train":
     train_gt_images_dir = f"./data/DIV2K/Meta_RDN/train"
 
     test_gt_images_dir = f"./data/Set5/GTmod12"
-    test_lr_images_dir = f"./data/Set5/LRbicx{upscale_factor}"
+    test_lr_images_dir = f"./data/Set5/LRbicx4"
 
     gt_image_size = 232
     lr_image_size = 50
@@ -84,7 +84,7 @@ if mode == "train":
 
 if mode == "test":
     # Test data address
-    gt_dir = f"./data/Set5/GTmod12"
+    gt_dir = f"./data/Set14/original"
     sr_dir = f"./results/{exp_name}"
 
-    model_weights_path = f""
+    model_weights_path = f"./results/pretrained_models/Meta_RDN-DIV2K-c33d0329.pth.tar"

@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+import math
 import os
 
 import cv2
@@ -55,8 +56,8 @@ def main() -> None:
     sr_model.eval()
 
     # Initialize the sharpness evaluation function
-    psnr = PSNR(config.upscale_factor, config.only_test_y_channel)
-    ssim = SSIM(config.upscale_factor, config.only_test_y_channel)
+    psnr = PSNR(math.ceil(config.upscale_factor), config.only_test_y_channel)
+    ssim = SSIM(math.ceil(config.upscale_factor), config.only_test_y_channel)
 
     # Set the sharpness evaluation function calculation device to the specified model
     psnr = psnr.to(device=config.device, non_blocking=True)
@@ -80,9 +81,12 @@ def main() -> None:
 
         # Automatically adjust input image size
         _, _, gt_height, gt_width = gt_tensor.size()
-        gt_tensor = transforms.CenterCrop([int((gt_height // config.upscale_factor) * config.upscale_factor),
-                                           int((gt_width // config.upscale_factor) * config.upscale_factor)])(gt_tensor)
-        lr_tensor = transforms.Resize([gt_height // config.upscale_factor, gt_width // config.upscale_factor],
+        gt_height = int(
+            int(gt_height - gt_height % config.upscale_factor) // config.upscale_factor * config.upscale_factor)
+        gt_width = int(
+            int(gt_width - gt_width % config.upscale_factor) // config.upscale_factor * config.upscale_factor)
+        gt_tensor = transforms.RandomCrop([gt_height, gt_width])(gt_tensor)
+        lr_tensor = transforms.Resize([int(gt_height / config.upscale_factor), int(gt_width / config.upscale_factor)],
                                       interpolation=IMode.BICUBIC)(gt_tensor)
 
         gt_tensor = gt_tensor.to(config.device, non_blocking=True)
