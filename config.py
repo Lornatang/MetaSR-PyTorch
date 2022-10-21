@@ -28,7 +28,7 @@ cudnn.benchmark = True
 # When evaluating the performance of the SR model, whether to verify only the Y channel image data
 only_test_y_channel = True
 # Model architecture name
-arch_name = "meta_rdn"
+arch_name = "metasr_rdn"
 # Model arch config
 in_channels = 3
 out_channels = 3
@@ -36,7 +36,7 @@ channels = 64
 growth_channels = 64
 conv_layers = 8
 num_blocks = 16
-upscale_factor = 4.0  # Use for test
+upscale_factor = 4  # Use for test
 # Image magnification factor
 upscale_factor_list = [
     1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0,
@@ -46,14 +46,14 @@ upscale_factor_list = [
 # Current configuration parameter method
 mode = "train"
 # Experiment name, easy to save weights and log files
-exp_name = "Meta_RDN"
+exp_name = "MetaSR_RDN-DIV2K"
 
 if mode == "train":
     # Dataset address
-    train_gt_images_dir = f"./data/DIV2K/Meta_RDN/train"
+    train_gt_images_dir = f"./data/DIV2K/MetaSR/train"
 
     test_gt_images_dir = f"./data/Set5/GTmod12"
-    test_lr_images_dir = f"./data/Set5/LRbicx4"
+    test_lr_images_dir = f"./data/Set5/LRbicx{upscale_factor}"
 
     gt_image_size = 232
     lr_image_size = 50
@@ -61,7 +61,7 @@ if mode == "train":
     num_workers = 4
 
     # The address to load the pretrained model
-    pretrained_model_weights_path = ""
+    pretrained_model_weights_path = f""
 
     # Incremental training and migration training
     resume_model_weights_path = f""
@@ -87,4 +87,4 @@ if mode == "test":
     gt_dir = f"./data/Set14/original"
     sr_dir = f"./results/{exp_name}"
 
-    model_weights_path = f"./results/pretrained_models/Meta_RDN-DIV2K-c33d0329.pth.tar"
+    model_weights_path = f"./results/pretrained_models/MetaSR_RDN-DIV2K-8daac205.pth.tar"

@@ -162,10 +162,7 @@ def load_dataset() -> [CUDAPrefetcher, CUDAPrefetcher]:
 def build_model() -> nn.Module:
     sr_model = model.__dict__[config.arch_name](in_channels=config.in_channels,
                                                 out_channels=config.out_channels,
-                                                channels=config.channels,
-                                                growth_channels=config.growth_channels,
-                                                conv_layers=config.conv_layers,
-                                                num_blocks=config.num_blocks)
+                                                channels=config.channels)
     sr_model = sr_model.to(device=config.device)
 
     return sr_model

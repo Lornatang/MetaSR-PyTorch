@@ -40,10 +40,7 @@ def build_model(model_arch_name: str, device: torch.device) -> nn.Module:
     # Initialize the super-resolution model
     sr_model = model.__dict__[model_arch_name](in_channels=3,
                                                out_channels=3,
-                                               channels=64,
-                                               growth_channels=64,
-                                               conv_layers=8,
-                                               num_blocks=16)
+                                               channels=64)
     sr_model = sr_model.to(device=device)
 
     return sr_model
@@ -92,7 +89,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Using the model generator super-resolution images.")
     parser.add_argument("--model_arch_name",
                         type=str,
-                        default="meta_rdn")
+                        default="metasr_rdn")
     parser.add_argument("--upscale_factor",
                         type=float,
                         default="4.0")
@@ -106,7 +103,7 @@ if __name__ == "__main__":
                         help="Super-resolution image path.")
     parser.add_argument("--model_weights_path",
                         type=str,
-                        default="./results/pretrained_models/Meta_RDN-DIV2K-c33d0329.pth.tar",
+                        default="./results/pretrained_models/MetaSR_RDN-DIV2K-8daac205.pth.tar",
                         help="Model weights file path.")
     parser.add_argument("--device_type",
                         type=str,

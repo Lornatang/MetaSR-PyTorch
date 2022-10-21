@@ -37,7 +37,7 @@ Contains DIV2K, DIV8K, Flickr2K, OST, T91, Set5, Set14, BSDS100 and BSDS200, etc
 ## Step3: Preprocess the train dataset
 
 ```bash
-cd <Meta_RDN-PyTorch-master>/scripts
+cd <MetaSR-PyTorch-master>/scripts
 python3 run.py
 ```
 
@@ -46,7 +46,7 @@ python3 run.py
 ```text
 # Train dataset
 - DIV2K
-    - Meta_RDN
+    - MetaSR
         - train
         - valid
         - original

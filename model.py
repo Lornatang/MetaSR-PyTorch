@@ -15,27 +15,28 @@ import math
 from typing import Any
 
 import torch
-from torch import nn
-from torch.nn import functional as F
 from torch import Tensor
+from torch import nn
+from torch.nn import functional as F_torch
 
 __all__ = [
-    "MetaRDN",
-    "meta_rdn",
+    "MetaSR_RDN",
+    "metasr_rdn",
 ]
 
 
-class _ResidualDenseConvBlock(nn.Module):
+class _ResidualBlock(nn.Module):
     def __init__(self, channels: int, growth_channels: int) -> None:
-        super(_ResidualDenseConvBlock, self).__init__()
-        self.rdb_conv = nn.Sequential(
+        super(_ResidualBlock, self).__init__()
+        self.rb = nn.Sequential(
             nn.Conv2d(channels, growth_channels, (3, 3), (1, 1), (1, 1)),
             nn.ReLU(True),
         )
 
     def forward(self, x: Tensor) -> Tensor:
         identity = x
-        out = self.rdb_conv(x)
+
+        out = self.rb(x)
         out = torch.cat([identity, out], 1)
 
         return out
@@ -46,17 +47,18 @@ class _ResidualDenseBlock(nn.Module):
         super(_ResidualDenseBlock, self).__init__()
         rdb = []
         for index in range(layers):
-            rdb.append(_ResidualDenseConvBlock(channels + index * growth_channels, growth_channels))
+            rdb.append(_ResidualBlock(channels + index * growth_channels, growth_channels))
         self.rdb = nn.Sequential(*rdb)
 
         # Local Feature Fusion layer
-        self.local_feature_fusion = nn.Conv2d(channels + layers * growth_channels, growth_channels, (1, 1), (1, 1),
-                                              (0, 0))
+        self.local_feature_fusion = nn.Conv2d(channels + layers * growth_channels, channels, (1, 1), (1, 1), (0, 0))
 
     def forward(self, x: Tensor) -> Tensor:
         identity = x
+
         out = self.rdb(x)
         out = self.local_feature_fusion(out)
+
         out = torch.add(out, identity)
 
         return out
@@ -90,17 +92,19 @@ def repeat(x: Tensor, upscale_factor: int) -> Tensor:
     return out
 
 
-class MetaRDN(nn.Module):
+class MetaSR_RDN(nn.Module):
     def __init__(
             self,
             in_channels: int = 3,
             out_channels: int = 3,
             channels: int = 64,
+            num_rdb: int = 16,
+            num_rb: int = 8,
             growth_channels: int = 64,
-            conv_layers: int = 8,
-            num_blocks: int = 16,
     ) -> None:
-        super(MetaRDN, self).__init__()
+        super(MetaSR_RDN, self).__init__()
+        self.num_rdb = num_rdb
+
         # First layer
         self.conv1 = nn.Conv2d(in_channels, channels, (3, 3), (1, 1), (1, 1))
 
@@ -109,21 +113,18 @@ class MetaRDN(nn.Module):
 
         # Residual Dense Blocks
         trunk = []
-        for _ in range(num_blocks):
-            trunk.append(_ResidualDenseBlock(channels, growth_channels, conv_layers))
+        for _ in range(num_rdb):
+            trunk.append(_ResidualDenseBlock(channels, growth_channels, num_rb))
         self.trunk = nn.Sequential(*trunk)
 
         # Global Feature Fusion
         self.global_feature_fusion = nn.Sequential(
-            nn.Conv2d(1024, channels, (1, 1), (1, 1), (0, 0)),
+            nn.Conv2d(int(num_rdb * channels), channels, (1, 1), (1, 1), (0, 0)),
             nn.Conv2d(channels, channels, (3, 3), (1, 1), (1, 1)),
         )
 
         # Position to weight
         self.pos_to_weight = _PosToWeight(channels, out_channels)
-
-        # Initialize all layer
-        self._initialize_weights()
 
     def forward(self, x: Tensor, pos_matrix: Tensor, upscale_factor: int) -> Tensor:
         return self._forward_impl(x, pos_matrix, upscale_factor)
@@ -133,20 +134,20 @@ class MetaRDN(nn.Module):
         out1 = self.conv1(x)
         out = self.conv2(out1)
 
-        trunks_out = []
-        for index in range(16):
-            out = self.trunk[index](out)
-            trunks_out.append(out)
+        outs = []
+        for i in range(self.num_rdb):
+            out = self.trunk[i](out)
+            outs.append(out)
 
-        out = torch.cat(trunks_out, 1)
+        out = torch.cat(outs, 1)
         out = self.global_feature_fusion(out)
-        out = torch.add(out, out1)
+        out = torch.add(out1, out)
 
         pos_matrix = pos_matrix.view(pos_matrix.size(1), -1)
         local_weight = self.pos_to_weight(pos_matrix)
 
         repeat_out = repeat(out, upscale_factor)
-        cols = F.unfold(repeat_out, 3, padding=1)
+        cols = F_torch.unfold(repeat_out, (3, 3), padding=1)
 
         upscale_factor = math.ceil(upscale_factor)
         cols = cols.contiguous().view(cols.size(0) // (upscale_factor ** 2),
@@ -154,9 +155,16 @@ class MetaRDN(nn.Module):
                                       cols.size(1),
                                       cols.size(2), 1).permute(0, 1, 3, 4, 2).contiguous()
 
-        local_weight = local_weight.contiguous().view(out.size(2), upscale_factor, out.size(3), upscale_factor, -1,
+        local_weight = local_weight.contiguous().view(out.size(2),
+                                                      upscale_factor,
+                                                      out.size(3),
+                                                      upscale_factor,
+                                                      -1,
                                                       3).permute(1, 3, 0, 2, 4, 5).contiguous()
-        local_weight = local_weight.contiguous().view(upscale_factor ** 2, out.size(2) * out.size(3), -1, 3)
+        local_weight = local_weight.contiguous().view(upscale_factor ** 2,
+                                                      out.size(2) * out.size(3),
+                                                      -1,
+                                                      3)
 
         outs = torch.matmul(cols, local_weight).permute(0, 1, 4, 2, 3)
         outs = outs.contiguous().view(out.size(0),
@@ -165,21 +173,17 @@ class MetaRDN(nn.Module):
                                       3,
                                       out.size(2),
                                       out.size(3)).permute(0, 3, 4, 1, 5, 2)
-        outs = outs.contiguous().view(out.size(0), 3, upscale_factor * out.size(2), upscale_factor * out.size(3))
+        outs = outs.contiguous().view(out.size(0),
+                                      3,
+                                      upscale_factor * out.size(2),
+                                      upscale_factor * out.size(3))
+
+        outs = outs.clamp_(0.0, 1.0)
 
         return outs
 
-    def _initialize_weights(self) -> None:
-        for module in self.modules():
-            if isinstance(module, nn.Conv2d):
-                nn.init.kaiming_normal_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-            elif isinstance(module, nn.BatchNorm2d):
-                nn.init.constant_(module.weight, 1)
 
-
-def meta_rdn(**kwargs: Any) -> MetaRDN:
-    model = MetaRDN(**kwargs)
+def metasr_rdn(**kwargs: Any) -> MetaSR_RDN:
+    model = MetaSR_RDN(num_rdb=16, num_rb=8, growth_channels=64, **kwargs)
 
     return model

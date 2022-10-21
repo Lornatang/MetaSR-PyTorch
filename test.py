@@ -56,12 +56,12 @@ def main() -> None:
     sr_model.eval()
 
     # Initialize the sharpness evaluation function
-    psnr = PSNR(math.ceil(config.upscale_factor), config.only_test_y_channel)
-    ssim = SSIM(math.ceil(config.upscale_factor), config.only_test_y_channel)
+    psnr_model = PSNR(math.ceil(config.upscale_factor), config.only_test_y_channel)
+    ssim_model = SSIM(math.ceil(config.upscale_factor), config.only_test_y_channel)
 
     # Set the sharpness evaluation function calculation device to the specified model
-    psnr = psnr.to(device=config.device, non_blocking=True)
-    ssim = ssim.to(device=config.device, non_blocking=True)
+    psnr_model = psnr_model.to(device=config.device, non_blocking=True)
+    ssim_model = ssim_model.to(device=config.device, non_blocking=True)
 
     # Initialize IQA metrics
     psnr_metrics = 0.0
@@ -81,11 +81,9 @@ def main() -> None:
 
         # Automatically adjust input image size
         _, _, gt_height, gt_width = gt_tensor.size()
-        gt_height = int(
-            int(gt_height - gt_height % config.upscale_factor) // config.upscale_factor * config.upscale_factor)
-        gt_width = int(
-            int(gt_width - gt_width % config.upscale_factor) // config.upscale_factor * config.upscale_factor)
-        gt_tensor = transforms.RandomCrop([gt_height, gt_width])(gt_tensor)
+        gt_height = int(gt_height - gt_height % config.upscale_factor) // config.upscale_factor * config.upscale_factor
+        gt_width = int(gt_width - gt_width % config.upscale_factor) // config.upscale_factor * config.upscale_factor
+        gt_tensor = transforms.RandomCrop([int(gt_height), int(gt_width)])(gt_tensor)
         lr_tensor = transforms.Resize([int(gt_height / config.upscale_factor), int(gt_width / config.upscale_factor)],
                                       interpolation=IMode.BICUBIC)(gt_tensor)
 
@@ -110,8 +108,8 @@ def main() -> None:
         cv2.imwrite(sr_image_path, sr_image)
 
         # Cal IQA metrics
-        psnr_metrics += psnr(sr_tensor, gt_tensor).item()
-        ssim_metrics += ssim(sr_tensor, gt_tensor).item()
+        psnr_metrics += psnr_model(sr_tensor, gt_tensor).item()
+        ssim_metrics += ssim_model(sr_tensor, gt_tensor).item()
 
     # Calculate the average value of the sharpness evaluation index,
     # and all index range values are cut according to the following values
